@@ -5,7 +5,9 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
+	"time"
 
 	"github.com/bootdotdev/learn-pub-sub-starter/internal/gamelogic"
 	"github.com/bootdotdev/learn-pub-sub-starter/internal/pubsub"
@@ -46,7 +48,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	err = pubsub.SubscribeJSON(amqpConn, routing.ExchangePerilTopic, routing.WarRecognitionsPrefix, routing.WarRecognitionsPrefix+".*", pubsub.Durable, handlerWar(gameState))
+	err = pubsub.SubscribeJSON(amqpConn, routing.ExchangePerilTopic, routing.WarRecognitionsPrefix, routing.WarRecognitionsPrefix+".*", pubsub.Durable, handlerWar(gameState, ch))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -82,7 +84,29 @@ func main() {
 			case "help":
 				gamelogic.PrintClientHelp()
 			case "spam":
-				fmt.Println("Spamming not allowed yet")
+				if len(words) < 2 {
+					fmt.Println("Usage: spam <n>")
+					continue
+				}
+				n, err := strconv.Atoi(words[1])
+				if err != nil {
+					fmt.Printf("Error: %v\n", err)
+					continue
+				}
+				for i := 0; i < n; i++ {
+					maliciousMsg := gamelogic.GetMaliciousLog()
+					gameLog := routing.GameLog{
+						CurrentTime: time.Now(),
+						Message:     maliciousMsg,
+						Username:    userName,
+					}
+					routingKey := fmt.Sprintf("%s.%s", routing.GameLogSlug, userName)
+					err := pubsub.PublishGob(ch, routing.ExchangePerilTopic, routingKey, gameLog)
+					if err != nil {
+						fmt.Printf("Error publishing log: %v\n", err)
+						continue
+					}
+				}
 			case "quit":
 				gamelogic.PrintQuit()
 				os.Exit(0)

@@ -13,6 +13,15 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
+func handlerGameLog(log routing.GameLog) pubsub.AckType {
+	defer fmt.Print("> ")
+	err := gamelogic.WriteLog(log)
+	if err != nil {
+		return pubsub.NackDiscard
+	}
+	return pubsub.Ack
+}
+
 func main() {
 	connString := "amqp://guest:guest@localhost:5672/"
 	amqpConn, err := amqp.Dial(connString)
@@ -29,25 +38,7 @@ func main() {
 	}
 	defer ch.Close()
 
-	_, err = ch.QueueDeclare(
-		routing.GameLogSlug,
-		true,
-		false,
-		false,
-		false,
-		nil,
-	)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	err = ch.QueueBind(
-		routing.GameLogSlug,
-		routing.GameLogSlug+".",
-		routing.ExchangePerilTopic,
-		false,
-		nil,
-	)
+	err = pubsub.SubscribeGob(amqpConn, routing.ExchangePerilTopic, routing.GameLogSlug, routing.GameLogSlug+".*", pubsub.Durable, handlerGameLog)
 	if err != nil {
 		log.Fatal(err)
 	}

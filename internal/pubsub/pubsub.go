@@ -1,7 +1,9 @@
 package pubsub
 
 import (
+	"bytes"
 	"context"
+	"encoding/gob"
 	"encoding/json"
 	"log"
 
@@ -25,6 +27,28 @@ func PublishJSON[T any](ch *amqp.Channel, exchange, key string, val T) error {
 		amqp.Publishing{
 			ContentType: "application/json",
 			Body:        body,
+		},
+	)
+}
+
+func PublishGob[T any](ch *amqp.Channel, exchange, key string, val T) error {
+	var buf bytes.Buffer
+	enc := gob.NewEncoder(&buf)
+	err := enc.Encode(val)
+	if err != nil {
+		log.Println(err)
+		return err
+	}
+
+	return ch.PublishWithContext(
+		context.Background(),
+		exchange,
+		key,
+		false,
+		false,
+		amqp.Publishing{
+			ContentType: "application/gob",
+			Body:        buf.Bytes(),
 		},
 	)
 }
@@ -92,16 +116,22 @@ func DeclareAndBind(
 	return ch, queue, nil
 }
 
-func SubscribeJSON[T any](
+func subscribe[T any](
 	conn *amqp.Connection,
 	exchange,
 	queueName,
 	key string,
-	queueType SimpleQueueType, // an enum to represent "durable" or "transient"
+	simpleQueueType SimpleQueueType,
 	handler func(T) AckType,
+	unmarshaller func([]byte) (T, error),
 ) error {
-	ch, q, err := DeclareAndBind(conn, exchange, queueName, key, queueType)
+	ch, q, err := DeclareAndBind(conn, exchange, queueName, key, simpleQueueType)
 	if err != nil {
+		return err
+	}
+	err = ch.Qos(10, 0, false)
+	if err != nil {
+		ch.Close()
 		return err
 	}
 	deliveries, err := ch.Consume(q.Name, "", false, false, false, false, nil)
@@ -110,10 +140,8 @@ func SubscribeJSON[T any](
 	}
 
 	go func() {
-
 		for d := range deliveries {
-			var msg T
-			err := json.Unmarshal(d.Body, &msg)
+			msg, err := unmarshaller(d.Body)
 			if err != nil {
 				d.Nack(false, false)
 				continue
@@ -136,4 +164,35 @@ func SubscribeJSON[T any](
 	}()
 
 	return nil
+}
+
+func SubscribeJSON[T any](
+	conn *amqp.Connection,
+	exchange,
+	queueName,
+	key string,
+	queueType SimpleQueueType,
+	handler func(T) AckType,
+) error {
+	return subscribe(conn, exchange, queueName, key, queueType, handler, func(body []byte) (T, error) {
+		var msg T
+		err := json.Unmarshal(body, &msg)
+		return msg, err
+	})
+}
+
+func SubscribeGob[T any](
+	conn *amqp.Connection,
+	exchange,
+	queueName,
+	key string,
+	simpleQueueType SimpleQueueType,
+	handler func(T) AckType,
+) error {
+	return subscribe(conn, exchange, queueName, key, simpleQueueType, handler, func(body []byte) (T, error) {
+		var msg T
+		dec := gob.NewDecoder(bytes.NewReader(body))
+		err := dec.Decode(&msg)
+		return msg, err
+	})
 }
