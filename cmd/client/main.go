@@ -34,14 +34,22 @@ func main() {
 		log.Fatal(err)
 	}
 
-	subCh, _, err := pubsub.DeclareAndBind(amqpConn, routing.ExchangePerilDirect, fmt.Sprintf("%s.%s", routing.PauseKey, userName), routing.PauseKey, pubsub.Transient)
+	gameState := gamelogic.NewGameState(userName)
+
+	err = pubsub.SubscribeJSON(amqpConn, routing.ExchangePerilTopic, fmt.Sprintf("%s.%s", routing.PauseKey, userName), routing.PauseKey, pubsub.Transient, handlerPause(gameState))
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	defer subCh.Close()
+	err = pubsub.SubscribeJSON(amqpConn, routing.ExchangePerilTopic, fmt.Sprintf("%s.%s", routing.ArmyMovesPrefix, userName), routing.ArmyMovesPrefix+".*", pubsub.Transient, handlerMove(gameState, ch))
+	if err != nil {
+		log.Fatal(err)
+	}
 
-	gameState := gamelogic.NewGameState(userName)
+	err = pubsub.SubscribeJSON(amqpConn, routing.ExchangePerilTopic, routing.WarRecognitionsPrefix, routing.WarRecognitionsPrefix+".*", pubsub.Durable, handlerWar(gameState))
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	go func() {
 		for {
@@ -54,14 +62,21 @@ func main() {
 			case "spawn":
 				err := gameState.CommandSpawn(words)
 				if err != nil {
-					log.Fatal(err)
+					fmt.Println(err)
+					continue
 				}
 			case "move":
 				mv, err := gameState.CommandMove(words)
 				if err != nil {
-					log.Fatal(err)
+					fmt.Println(err)
+					continue
 				}
-				fmt.Println("Successfully moved!", mv)
+				err = pubsub.PublishJSON(ch, routing.ExchangePerilTopic, fmt.Sprintf("%s.%s", routing.ArmyMovesPrefix, userName), mv)
+				if err != nil {
+					fmt.Println(err)
+					continue
+				}
+				fmt.Println("Move published successfully")
 			case "status":
 				gameState.CommandStatus()
 			case "help":
@@ -70,6 +85,7 @@ func main() {
 				fmt.Println("Spamming not allowed yet")
 			case "quit":
 				gamelogic.PrintQuit()
+				os.Exit(0)
 			default:
 				fmt.Println("Unknown command")
 			}

@@ -67,7 +67,7 @@ func main() {
 				fmt.Println("Sending pause message...")
 				_ = pubsub.PublishJSON(
 					ch,
-					routing.ExchangePerilDirect,
+					routing.ExchangePerilTopic,
 					routing.PauseKey,
 					routing.PlayingState{IsPaused: true},
 				)
@@ -76,7 +76,7 @@ func main() {
 				fmt.Println("Sending resume message...")
 				_ = pubsub.PublishJSON(
 					ch,
-					routing.ExchangePerilDirect,
+					routing.ExchangePerilTopic,
 					routing.PauseKey,
 					routing.PlayingState{IsPaused: false},
 				)

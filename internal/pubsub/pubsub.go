@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 
+	"github.com/bootdotdev/learn-pub-sub-starter/internal/routing"
 	amqp "github.com/rabbitmq/amqp091-go"
 )
 
@@ -30,6 +31,14 @@ func PublishJSON[T any](ch *amqp.Channel, exchange, key string, val T) error {
 
 type SimpleQueueType int
 
+type AckType int
+
+const (
+	Ack AckType = iota
+	NackRequeue
+	NackDiscard
+)
+
 const (
 	Durable SimpleQueueType = iota
 	Transient
@@ -50,13 +59,16 @@ func DeclareAndBind(
 	durable := queueType == Durable
 	autoDelete := queueType == Transient
 	exclusive := queueType == Transient
+	args := amqp.Table{
+		"x-dead-letter-exchange": routing.ExchangePerilDLX,
+	}
 	queue, err := ch.QueueDeclare(
 		queueName,
 		durable,
 		autoDelete,
 		exclusive,
 		false,
-		nil,
+		args,
 	)
 
 	if err != nil {
@@ -78,4 +90,50 @@ func DeclareAndBind(
 	}
 
 	return ch, queue, nil
+}
+
+func SubscribeJSON[T any](
+	conn *amqp.Connection,
+	exchange,
+	queueName,
+	key string,
+	queueType SimpleQueueType, // an enum to represent "durable" or "transient"
+	handler func(T) AckType,
+) error {
+	ch, q, err := DeclareAndBind(conn, exchange, queueName, key, queueType)
+	if err != nil {
+		return err
+	}
+	deliveries, err := ch.Consume(q.Name, "", false, false, false, false, nil)
+	if err != nil {
+		return err
+	}
+
+	go func() {
+
+		for d := range deliveries {
+			var msg T
+			err := json.Unmarshal(d.Body, &msg)
+			if err != nil {
+				d.Nack(false, false)
+				continue
+			}
+
+			ackType := handler(msg)
+
+			switch ackType {
+			case Ack:
+				log.Println("Acknowledging message")
+				d.Ack(false)
+			case NackRequeue:
+				log.Println("Nacking message with requeue")
+				d.Nack(false, true)
+			case NackDiscard:
+				log.Println("Nacking message without requeue (discarding)")
+				d.Nack(false, false)
+			}
+		}
+	}()
+
+	return nil
 }
